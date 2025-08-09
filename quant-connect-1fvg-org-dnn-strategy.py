@@ -93,7 +93,7 @@ class CompleteFVGTradingSystem(QCAlgorithm):
 
         data = history.reset_index(level=0, drop=True)
         
-        # REQUIREMENT 3: 3 candlestick pattern logic - look for FIRST FVG
+        # REQUIREMENT 3: 3 candlestick pattern logic - look for FIRST FVG (any type)
         for i in range(len(data) - 2):
             c1 = data.iloc[i]      # First candle
             c2 = data.iloc[i + 1]  # Second candle (the gap candle)
@@ -104,59 +104,65 @@ class CompleteFVGTradingSystem(QCAlgorithm):
             c3_high = float(c3['high'])
             c3_low = float(c3['low'])
             
-            # Check for Bullish FVG: c1.high < c3.low (gap up)
-            if c1_high < c3_low:
+            # Check for ANY FVG pattern (bullish OR bearish)
+            is_bullish_fvg = c1_high < c3_low  # Gap up
+            is_bearish_fvg = c1_low > c3_high  # Gap down
+            
+            if is_bullish_fvg or is_bearish_fvg:
                 self.fvg_patterns_found += 1
                 
-                # REQUIREMENT 4: Must match daily bias
+                # Found FIRST FVG - now use DAILY BIAS for trade direction
+                current_bar = slice.bars[self.current_contract]
+                entry_price = float(current_bar.close)
+                
                 if self.daily_bias == 'Bullish':
-                    # Valid bullish FVG + bullish bias
-                    current_bar = slice.bars[self.current_contract]
-                    entry_price = float(current_bar.close)
+                    # BULLISH BIAS: Look for price to close above FVG area for long entry
+                    if is_bullish_fvg:
+                        # Bullish FVG: Enter if price closes above c1.low
+                        fvg_trigger_level = c1_low
+                        stop_loss = c3_low  # Stop below the gap
+                    else:
+                        # Bearish FVG: Enter if price closes above c1.low  
+                        fvg_trigger_level = c1_low
+                        stop_loss = c3_high  # Stop below the gap area
                     
-                    # FVG entry logic: enter above c1.low, stop below gap
-                    fvg_entry_level = c1_low  # Entry level from FVG
-                    stop_loss = c1_high       # Stop below the gap
                     risk = entry_price - stop_loss
                     take_profit = entry_price + risk  # 1:1 RR
                     
-                    # Check if current price allows entry
-                    if risk > 0 and entry_price > fvg_entry_level and self.current_contract:
+                    # Enter long if price closes above FVG trigger level
+                    if risk > 0 and entry_price > fvg_trigger_level and self.current_contract:
                         self.trades_attempted += 1
                         self.market_order(self.current_contract, self.position_size)
                         self.stop_market_order(self.current_contract, -self.position_size, stop_loss)
                         self.limit_order(self.current_contract, -self.position_size, take_profit)
                         self.daily_trade_taken = True
-                        return  # Found first FVG, stop looking
-                else:
-                    self.bias_mismatches += 1  # Found FVG but wrong bias
-            
-            # Check for Bearish FVG: c1.low > c3.high (gap down)
-            elif c1_low > c3_high:
-                self.fvg_patterns_found += 1
+                        return  # Found first FVG and entered, stop looking
                 
-                # REQUIREMENT 4: Must match daily bias
-                if self.daily_bias == 'Bearish':
-                    # Valid bearish FVG + bearish bias
-                    current_bar = slice.bars[self.current_contract]
-                    entry_price = float(current_bar.close)
+                elif self.daily_bias == 'Bearish':
+                    # BEARISH BIAS: Look for price to close below FVG area for short entry
+                    if is_bearish_fvg:
+                        # Bearish FVG: Enter if price closes below c3.high
+                        fvg_trigger_level = c3_high
+                        stop_loss = c1_high  # Stop above the gap
+                    else:
+                        # Bullish FVG: Enter if price closes below c3.high
+                        fvg_trigger_level = c3_high  
+                        stop_loss = c1_low   # Stop above the gap area
                     
-                    # FVG entry logic: enter below c3.high, stop above gap
-                    fvg_entry_level = c3_high  # Entry level from FVG
-                    stop_loss = c1_low         # Stop above the gap
                     risk = stop_loss - entry_price
                     take_profit = entry_price - risk  # 1:1 RR
                     
-                    # Check if current price allows entry
-                    if risk > 0 and entry_price < fvg_entry_level and self.current_contract:
+                    # Enter short if price closes below FVG trigger level
+                    if risk > 0 and entry_price < fvg_trigger_level and self.current_contract:
                         self.trades_attempted += 1
                         self.market_order(self.current_contract, -self.position_size)
                         self.stop_market_order(self.current_contract, self.position_size, stop_loss)
                         self.limit_order(self.current_contract, self.position_size, take_profit)
                         self.daily_trade_taken = True
-                        return  # Found first FVG, stop looking
+                        return  # Found first FVG and entered, stop looking
+                
                 else:
-                    self.bias_mismatches += 1  # Found FVG but wrong bias
+                    self.bias_mismatches += 1  # Found FVG but no clear bias
 
     def on_end_of_day(self, symbol):
         if not self.is_warming_up and self.current_contract:
